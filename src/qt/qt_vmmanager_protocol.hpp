@@ -41,6 +41,9 @@ public:
         RequestShutdown,
         ForceShutdown,
         GlobalConfigurationChanged,
+        FloppyInsert,
+        FloppyEject,
+        FloppyRefresh,
         UnknownMessage,
     };
 

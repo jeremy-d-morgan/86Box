@@ -548,6 +548,17 @@ MediaMenu::floppyEject(int i)
 }
 
 void
+MediaMenu::floppyRefresh(int i)
+{
+    QString current = QString::fromUtf8(floppyfns[i]);
+    if (current.isEmpty())
+        return;
+    bool wp = ui_writeprot[i];
+    floppyEject(i);
+    floppyMount(i, current, wp);
+}
+
+void
 MediaMenu::floppyExportTo86f(int i)
 {
     auto filename = QFileDialog::getSaveFileName(parentWidget, QString(), QString(), tr("Surface images") % util::DlgFilter({ "86f" }, true));

@@ -2310,6 +2310,24 @@ MainWindow::togglePause()
 }
 
 void
+MainWindow::floppyInsert(int drive, const QString &path, bool writeProtect)
+{
+    mm->floppyMount(drive, path, writeProtect);
+}
+
+void
+MainWindow::floppyEject(int drive)
+{
+    mm->floppyEject(drive);
+}
+
+void
+MainWindow::floppyRefresh(int drive)
+{
+    mm->floppyRefresh(drive);
+}
+
+void
 MainWindow::changeEvent(QEvent *event)
 {
 #ifdef Q_OS_WINDOWS

@@ -189,6 +189,41 @@ VMManagerClientSocket::jsonReceived(const QJsonObject &json)
 #endif
                 break;
             }
+        case VMManagerProtocol::ManagerMessage::FloppyInsert:
+            {
+                qDebug("FloppyInsert command received from manager");
+                QJsonObject params = VMManagerProtocol::getParams(json);
+                if (!params.isEmpty()) {
+                    int     drive        = params.value("drive").toInt(-1);
+                    QString path         = params.value("path").toString();
+                    bool    write_protect = params.value("writeProtect").toBool(false);
+                    if (drive >= 0 && drive < 4 && !path.isEmpty())
+                        emit floppyInsert(drive, path, write_protect);
+                }
+                break;
+            }
+        case VMManagerProtocol::ManagerMessage::FloppyEject:
+            {
+                qDebug("FloppyEject command received from manager");
+                QJsonObject params = VMManagerProtocol::getParams(json);
+                if (!params.isEmpty()) {
+                    int drive = params.value("drive").toInt(-1);
+                    if (drive >= 0 && drive < 4)
+                        emit floppyEject(drive);
+                }
+                break;
+            }
+        case VMManagerProtocol::ManagerMessage::FloppyRefresh:
+            {
+                qDebug("FloppyRefresh command received from manager");
+                QJsonObject params = VMManagerProtocol::getParams(json);
+                if (!params.isEmpty()) {
+                    int drive = params.value("drive").toInt(-1);
+                    if (drive >= 0 && drive < 4)
+                        emit floppyRefresh(drive);
+                }
+                break;
+            }
         default:
             qDebug("Unknown client message type received:");
             qDebug() << json;

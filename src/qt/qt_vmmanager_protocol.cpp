@@ -131,6 +131,15 @@ VMManagerProtocol::getManagerMessageType(const QJsonObject &json_document)
     if (message_type == "GlobalConfigurationChanged")
         return VMManagerProtocol::ManagerMessage::GlobalConfigurationChanged;
 
+    if (message_type == "FloppyInsert")
+        return VMManagerProtocol::ManagerMessage::FloppyInsert;
+
+    if (message_type == "FloppyEject")
+        return VMManagerProtocol::ManagerMessage::FloppyEject;
+
+    if (message_type == "FloppyRefresh")
+        return VMManagerProtocol::ManagerMessage::FloppyRefresh;
+
     return VMManagerProtocol::ManagerMessage::UnknownMessage;
 }
 

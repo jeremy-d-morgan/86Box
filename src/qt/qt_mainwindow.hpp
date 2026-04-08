@@ -76,6 +76,9 @@ public slots:
     void showSettings();
     void hardReset();
     void togglePause();
+    void floppyInsert(int drive, const QString &path, bool writeProtect);
+    void floppyEject(int drive);
+    void floppyRefresh(int drive);
     void initRendererMonitorSlot(int monitor_index);
     void destroyRendererMonitorSlot(int monitor_index);
     void updateStatusEmptyIcons();

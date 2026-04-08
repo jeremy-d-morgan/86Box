@@ -38,6 +38,9 @@ signals:
     void request_shutdown();
     void force_shutdown();
     void dialogstatus(bool open);
+    void floppyInsert(int drive, const QString &path, bool writeProtect);
+    void floppyEject(int drive);
+    void floppyRefresh(int drive);
 
 public slots:
     void clientRunningStateChanged(VMManagerProtocol::RunningState state) const;

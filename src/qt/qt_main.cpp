@@ -856,6 +856,9 @@ main(int argc, char *argv[])
             do_stop();
             emit main_window->close();
         });
+        QObject::connect(&manager_socket, &VMManagerClientSocket::floppyInsert, main_window, &MainWindow::floppyInsert);
+        QObject::connect(&manager_socket, &VMManagerClientSocket::floppyEject, main_window, &MainWindow::floppyEject);
+        QObject::connect(&manager_socket, &VMManagerClientSocket::floppyRefresh, main_window, &MainWindow::floppyRefresh);
         QObject::connect(main_window, &MainWindow::vmmRunningStateChanged, &manager_socket, &VMManagerClientSocket::clientRunningStateChanged);
         QObject::connect(main_window, &MainWindow::vmmConfigurationChanged, &manager_socket, &VMManagerClientSocket::configurationChanged);
         QObject::connect(main_window, &MainWindow::vmmGlobalConfigurationChanged, &manager_socket, &VMManagerClientSocket::globalConfigurationChanged);
