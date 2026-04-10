@@ -127,11 +127,13 @@ runs its own event loop thread. When the first RFB client connects,
 disconnects, the emulator pauses again.
 
 The framebuffer is declared at the maximum supported size (2048×2048) for
-the lifetime of the session. Dynamic resize (ExtDesktopSize) is suppressed
-because libvncserver has no way to atomically discard already-queued
-FramebufferUpdate rects before sending the new size notification — doing so
-caused "rect too big" disconnects in all tested clients. Instead, `vnc_blit`
-marks only the actual content area as modified and blits are clipped to fit.
+the lifetime of the session. Dynamic resize via `ExtDesktopSize` is supported:
+when the VM changes video mode, `plat_resize_request` calls `vnc_resize` which
+updates `rfb->width`/`rfb->height` and sets `newFBSizePending` on all connected
+clients. `vnc_blit` then performs a nearest-neighbor stretch from the native
+pixel dimensions to the declared canvas size, matching the scaling the Qt
+renderer applies to its widget — most visibly for the `force_43` path which
+maps e.g. a 720×400 text mode to a 720×540 canvas.
 
 Server-side cursor rendering is disabled: the VM renders its own cursor into
 the framebuffer, and libvncserver's RichCursor path produced garbage-sized
@@ -142,17 +144,24 @@ clearing `cursorWasChanged` before every framebuffer update.
 
 ### Files changed
 
+**`src/86box.c`**
+- `force_43` defaulted to `1` (4:3 ratio on by default for new VMs).
+
 **`src/vnc.c`**
 - Fixed null dereference in `vnc_init`: `ui_window_title(NULL)` return is now null-checked before `wcstombs`.
-- Framebuffer declared at fixed 2048×2048; `vnc_resize` is a documented no-op.
-- `vnc_blit` marks only the actual blit rect, not the full 2048×2048 canvas.
+- Framebuffer declared at fixed 2048×2048 stride; `rfb->width`/`rfb->height` track the current video mode.
+- `vnc_resize` implemented: updates declared canvas dimensions and sets `newFBSizePending` on all clients.
+- `vnc_blit` performs nearest-neighbor stretch from native pixel dimensions to declared canvas size.
 - `vnc_display` hook clears all cursor shape/position flags before every update, suppressing server-side cursor sends.
 - `vnc_newclient` disables `enableCursorShapeUpdates`, `enableCursorPosUpdates`, `useRichCursorEncoding` immediately on connect.
 - `rfbDefaultPtrAddEvent` call removed from `vnc_ptrevent` (it triggered the same corrupt cursor path).
 - 1×1 transparent cursor installed via `rfbMakeXCursor` after `rfbInitServer`.
 - `rfbSetCursor(rfb, NULL)` replaced with the transparent cursor (NULL caused rfbSendCursorShape to read garbage).
-- Mouse absolute coordinates now computed from `VNC_MAX_X`/`VNC_MAX_Y` rather than removed `allowedX`/`allowedY` variables.
+- Mouse absolute coordinates now computed from `VNC_MAX_X`/`VNC_MAX_Y`.
 - `rfbReleaseClientIterator` was missing; added (was a minor resource leak).
+
+**`src/qt/qt_ui.cpp`**
+- `plat_resize` and `plat_resize_request` call `vnc_resize` when headless, forwarding the 4:3-corrected canvas dimensions to the VNC renderer.
 
 ### noVNC web viewer (`jeremy-dev/headless_test/`)
 

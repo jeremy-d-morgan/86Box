@@ -9,7 +9,7 @@ mkdir -p "$BUILD_DIR"
 
 cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DUSE_QT6=ON -DVNC=ON
 
-ninja -C "$BUILD_DIR"
+ninja -j$(nproc) -C "$BUILD_DIR"
 
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
 DEST_TIME="$DEST_DIR/86Box-dev-$TIMESTAMP"

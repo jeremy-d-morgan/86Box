@@ -189,17 +189,36 @@ vnc_blit(int x, int y, int w, int h, int monitor_index)
         return;
     }
 
-    for (int row = 0; row < h; ++row)
-        video_copy(&(((uint8_t *) rfb->frameBuffer)[row * 2048 * sizeof(uint32_t)]), &(buffer32->line[y + row][x]), w * sizeof(uint32_t));
+    /* Scale the native blit (w × h) to fill the declared VNC canvas
+       (rfb->width × rfb->height).  This mirrors what the Qt renderer stack
+       does when it stretches the blit to fill its widget — most visibly, the
+       force_43 path computes a taller canvas height (e.g. 720×540 for a
+       720×400 text mode) and the content must be vertically stretched to
+       match.  Nearest-neighbor is sufficient for integer-ish scale factors. */
+    int dst_w = (rfb != NULL && rfb->width  > 0) ? rfb->width  : w;
+    int dst_h = (rfb != NULL && rfb->height > 0) ? rfb->height : h;
+
+    for (int dst_row = 0; dst_row < dst_h; ++dst_row) {
+        int src_row = dst_row * h / dst_h;
+        uint8_t *dst_ptr = ((uint8_t *) rfb->frameBuffer) + (dst_row * VNC_MAX_X * sizeof(uint32_t));
+
+        if (dst_w == w) {
+            video_copy(dst_ptr, &(buffer32->line[y + src_row][x]), w * sizeof(uint32_t));
+        } else {
+            /* Horizontal nearest-neighbor stretch. */
+            uint32_t *dst32 = (uint32_t *) dst_ptr;
+            uint32_t *src32 = &(buffer32->line[y + src_row][x]);
+            for (int dst_col = 0; dst_col < dst_w; ++dst_col)
+                dst32[dst_col] = src32[dst_col * w / dst_w];
+        }
+    }
 
     if (screenshots)
         video_screenshot((uint32_t *) rfb->frameBuffer, 0, 0, VNC_MAX_X);
 
     video_blit_complete_monitor(monitor_index);
 
-    /* Clamp to the declared framebuffer size — resize is suppressed so
-       rfb->width/height are fixed, and we must never mark outside them. */
-    rfbMarkRectAsModified(rfb, 0, 0, w, h);
+    rfbMarkRectAsModified(rfb, 0, 0, dst_w, dst_h);
 }
 
 /* Initialize VNC for operation. */
@@ -287,14 +306,30 @@ vnc_close(void)
 void
 vnc_resize(int x, int y)
 {
-    /* Dynamic resize is suppressed. Sending ExtDesktopSize concurrently with
-       pending FramebufferUpdates causes "rect too big" errors in VNC clients
-       due to an inherent race in libvncserver's update path — there is no way
-       to atomically discard already-queued rects and notify the new size.
-       The declared framebuffer size stays fixed at init dimensions; blits are
-       clamped in vnc_blit to whatever fits. */
-    (void) x;
-    (void) y;
+    rfbClientIteratorPtr iterator;
+    rfbClientPtr         cl;
+
+    if (rfb == NULL)
+        return;
+
+    if ((x < VNC_MIN_X) || (x > VNC_MAX_X) || (y < VNC_MIN_Y) || (y > VNC_MAX_Y))
+        return;
+
+    if (x == rfb->width && y == rfb->height)
+        return;
+
+    vnc_log("VNC: resize %dx%d\n", x, y);
+
+    rfb->width  = x;
+    rfb->height = y;
+
+    iterator = rfbGetClientIterator(rfb);
+    while ((cl = rfbClientIteratorNext(iterator)) != NULL) {
+        LOCK(cl->updateMutex);
+        cl->newFBSizePending = 1;
+        UNLOCK(cl->updateMutex);
+    }
+    rfbReleaseClientIterator(iterator);
 }
 
 /* Tell them to pause if we have no clients. */

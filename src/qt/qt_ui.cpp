@@ -60,6 +60,9 @@ extern "C" {
 #ifdef Q_OS_WINDOWS
 #    include <86box/win.h>
 #endif
+#ifdef USE_VNC
+#    include <86box/vnc.h>
+#endif
 
 void
 plat_delay_ms(uint32_t count)
@@ -110,8 +113,13 @@ extern "C" int vid_resize;
 void
 plat_resize_request(int w, int h, int monitor_index)
 {
-    if (main_window == nullptr || video_fullscreen || is_quit)
+    if (main_window == nullptr || video_fullscreen || is_quit) {
+#ifdef USE_VNC
+        if (main_window == nullptr && headless && monitor_index == 0)
+            vnc_resize(w, h);
+#endif
         return;
+    }
     if (vid_resize & 2) {
         plat_resize(fixed_size_x, fixed_size_y, monitor_index);
     } else {
@@ -124,6 +132,10 @@ plat_resize(int w, int h, int monitor_index)
 {
     if (main_window == nullptr)
         return;
+#ifdef USE_VNC
+    if (headless && monitor_index == 0)
+        vnc_resize(w, h);
+#endif
     if (monitor_index >= 1)
         main_window->resizeContentsMonitor(w, h, monitor_index);
     else
