@@ -36,6 +36,7 @@ extern "C" {
 
 #include "86box/86box.h"
 #include <86box/plat.h>
+#include <86box/video.h>
 #include <86box/ui.h>
 #include <86box/mouse.h>
 #include <86box/timer.h>
@@ -73,6 +74,9 @@ plat_delay_ms(uint32_t count)
 wchar_t *
 ui_window_title(wchar_t *str)
 {
+    if (main_window == nullptr)
+        return str;
+
     if (str == nullptr) {
         static wchar_t title[512] = { 0 };
 
@@ -87,12 +91,18 @@ ui_window_title(wchar_t *str)
 void
 ui_hard_reset_completed()
 {
+    if (main_window == nullptr)
+        return;
     emit main_window->hardResetCompleted();
 }
 
 extern "C" void
 qt_blit(int x, int y, int w, int h, int monitor_index)
 {
+    if (main_window == nullptr) {
+        video_blit_complete_monitor(monitor_index);
+        return;
+    }
     main_window->blitToWidget(x, y, w, h, monitor_index);
 }
 
@@ -100,7 +110,7 @@ extern "C" int vid_resize;
 void
 plat_resize_request(int w, int h, int monitor_index)
 {
-    if (video_fullscreen || is_quit)
+    if (main_window == nullptr || video_fullscreen || is_quit)
         return;
     if (vid_resize & 2) {
         plat_resize(fixed_size_x, fixed_size_y, monitor_index);
@@ -112,6 +122,8 @@ plat_resize_request(int w, int h, int monitor_index)
 void
 plat_resize(int w, int h, int monitor_index)
 {
+    if (main_window == nullptr)
+        return;
     if (monitor_index >= 1)
         main_window->resizeContentsMonitor(w, h, monitor_index);
     else
@@ -125,6 +137,8 @@ extern HWND rw_hwnd;
 void
 plat_mouse_capture(int on)
 {
+    if (main_window == nullptr)
+        return;
     if (!kbd_req_capture && (mouse_type == MOUSE_TYPE_NONE) && !machine_has_mouse())
         return;
 
@@ -178,6 +192,8 @@ ui_msgbox_header(int flags, void *header, void *message)
 void
 ui_init_monitor(int monitor_index)
 {
+    if (main_window == nullptr)
+        return;
     if (QThread::currentThread() == main_window->thread()) {
         emit main_window->initRendererMonitor(monitor_index);
     } else
@@ -187,6 +203,8 @@ ui_init_monitor(int monitor_index)
 void
 ui_deinit_monitor(int monitor_index)
 {
+    if (main_window == nullptr)
+        return;
     if (QThread::currentThread() == main_window->thread()) {
         emit main_window->destroyRendererMonitor(monitor_index);
     } else
@@ -202,6 +220,8 @@ ui_msgbox(int flags, void *message)
 void
 ui_sb_update_text()
 {
+    if (main_window == nullptr)
+        return;
     emit main_window->statusBarMessage(!sb_mt32lcdtext.isEmpty() ? sb_mt32lcdtext : sb_text.isEmpty() ? sb_buguitext
                                                                                                       : sb_text);
 }
@@ -230,12 +250,16 @@ ui_sb_set_text(char *str)
 void
 ui_sb_update_tip(int arg)
 {
+    if (main_window == nullptr)
+        return;
     main_window->updateStatusBarTip(arg);
 }
 
 void
 ui_sb_update_panes()
 {
+    if (main_window == nullptr)
+        return;
     main_window->updateStatusBarPanes();
 }
 

@@ -37,9 +37,6 @@
 
 static rfbScreenInfoPtr rfb = NULL;
 static int              clients;
-static int              updatingSize;
-static int              allowedX;
-static int              allowedY;
 static int              ptr_x;
 static int              ptr_y;
 static int              ptr_but;
@@ -97,15 +94,18 @@ vnc_ptrevent(int but, int x, int y, rfbClientPtr cl)
     ptr_x = x;
     ptr_y = y;
 
-    mouse_x_abs = (double)ptr_x / (double)allowedX;
-    mouse_y_abs = (double)ptr_y / (double)allowedY;
+    mouse_x_abs = (double)ptr_x / (double)VNC_MAX_X;
+    mouse_y_abs = (double)ptr_y / (double)VNC_MAX_Y;
 
     if (mouse_x_abs > 1.0) mouse_x_abs = 1.0;
     if (mouse_y_abs > 1.0) mouse_y_abs = 1.0;
     if (mouse_x_abs < 0.0) mouse_x_abs = 0.0;
     if (mouse_y_abs < 0.0) mouse_y_abs = 0.0;
 
-    rfbDefaultPtrAddEvent(but, x, y, cl);
+    /* Do not call rfbDefaultPtrAddEvent — it triggers server-side software
+       cursor rendering which computes garbage rect sizes from an uninitialized
+       cursor sprite, causing "rect too big" disconnects.  The VM renders its
+       own cursor into the framebuffer so no server-side cursor is needed. */
 }
 
 static void
@@ -134,11 +134,21 @@ vnc_newclient(rfbClientPtr cl)
     /* Hook the ClientGone function so we know when they're gone. */
     cl->clientGoneHook = vnc_clientgone;
 
+    /* Disable server-side cursor encoding.  The VM renders its own cursor
+       into the framebuffer.  libvncserver's RichCursor path can produce
+       garbage-dimensioned cursor rects (0xFFFF x 0xFFF8) that cause
+       "rect too big" disconnects in VNC clients. */
+    cl->enableCursorShapeUpdates = FALSE;
+    cl->enableCursorPosUpdates   = FALSE;
+    cl->useRichCursorEncoding    = FALSE;
+    cl->cursorWasChanged         = FALSE;
+    cl->cursorWasMoved           = FALSE;
+
     vnc_log("VNC: new client: %s\n", cl->host);
     if (++clients == 1) {
         /* Reset the mouse. */
-        ptr_x   = allowedX / 2;
-        ptr_y   = allowedY / 2;
+        ptr_x   = VNC_MAX_X / 2;
+        ptr_y   = VNC_MAX_Y / 2;
         mouse_clear_coords();
         mouse_clear_buttons();
 
@@ -160,15 +170,15 @@ vnc_newclient(rfbClientPtr cl)
 static void
 vnc_display(rfbClientPtr cl)
 {
-    /* Avoid race condition between resize and update. */
-    if (!updatingSize && cl->newFBSizePending) {
-        updatingSize = 1;
-    } else if (updatingSize && !cl->newFBSizePending) {
-        updatingSize = 0;
-
-        allowedX = rfb->width;
-        allowedY = rfb->height;
-    }
+    /* libvncserver re-enables cursor shape updates when it processes the
+       client's SetEncodings message (after vnc_newclient returns).  Clear
+       the flags here, which runs just before rfbSendFramebufferUpdate, so
+       rfbSendCursorShape is never called.  The VM renders its own cursor. */
+    cl->enableCursorShapeUpdates = FALSE;
+    cl->enableCursorPosUpdates   = FALSE;
+    cl->useRichCursorEncoding    = FALSE;
+    cl->cursorWasChanged         = FALSE;
+    cl->cursorWasMoved           = FALSE;
 }
 
 static void
@@ -187,8 +197,9 @@ vnc_blit(int x, int y, int w, int h, int monitor_index)
 
     video_blit_complete_monitor(monitor_index);
 
-    if (!updatingSize)
-        rfbMarkRectAsModified(rfb, 0, 0, allowedX, allowedY);
+    /* Clamp to the declared framebuffer size — resize is suppressed so
+       rfb->width/height are fixed, and we must never mark outside them. */
+    rfbMarkRectAsModified(rfb, 0, 0, w, h);
 }
 
 /* Initialize VNC for operation. */
@@ -213,11 +224,16 @@ vnc_init(UNUSED(void *arg))
     cgapal_rebuild_monitor(0);
 
     if (rfb == NULL) {
-        wcstombs(title, ui_window_title(NULL), sizeof(title));
-        updatingSize = 0;
-        allowedX     = scrnsz_x;
-        allowedY     = scrnsz_y;
+        wchar_t *win_title = ui_window_title(NULL);
+        wcstombs(title, win_title ? win_title : L"86Box", sizeof(title));
 
+        /* Declare the screen at full VNC_MAX_X × VNC_MAX_Y.  Dynamic resize is
+           suppressed (see vnc_resize), so we keep one fixed size for the whole
+           session.  Using the max dimensions avoids any mismatch between the
+           declared screen size and the paddedWidthInBytes stride that
+           rfbGetScreen computes internally — mixing the two caused "rect too
+           big" errors when the VNC client received a rect whose coordinates
+           exceeded the overridden rfb->width/height. */
         rfb              = rfbGetScreen(0, NULL, VNC_MAX_X, VNC_MAX_Y, 8, 3, 4);
         rfb->desktopName = title;
         rfb->frameBuffer = (char *) calloc(VNC_MAX_X * VNC_MAX_Y, 4);
@@ -229,11 +245,17 @@ vnc_init(UNUSED(void *arg))
         rfb->kbdAddEvent   = vnc_kbdevent;
         rfb->newClientHook = vnc_newclient;
 
-        /* Set up our current resolution. */
-        rfb->width  = allowedX;
-        rfb->height = allowedY;
-
         rfbInitServer(rfb);
+
+        /* Replace the default cursor with a 1×1 transparent one.  The VM
+           renders its own cursor into the framebuffer; we don't want
+           libvncserver to composite a server-side cursor sprite on top.
+           A NULL cursor causes rfbSendCursorShape to read garbage and
+           produce "rect too big" (65535×65528) errors in clients.  A
+           valid 1×1 cursor is sent once and then suppressed by
+           vnc_display clearing cursorWasChanged before every update. */
+        rfbCursorPtr empty_cursor = rfbMakeXCursor(1, 1, " ", " ");
+        rfbSetCursor(rfb, empty_cursor);
 
         rfbRunEventLoop(rfb, -1, TRUE);
     }
@@ -265,34 +287,14 @@ vnc_close(void)
 void
 vnc_resize(int x, int y)
 {
-    rfbClientIteratorPtr iterator;
-    rfbClientPtr         cl;
-
-    if (rfb == NULL)
-        return;
-
-    /* TightVNC doesn't like certain sizes.. */
-    if ((x < VNC_MIN_X) || (x > VNC_MAX_X) || (y < VNC_MIN_Y) || (y > VNC_MAX_Y)) {
-        vnc_log("VNC: invalid resoltion %dx%d requested!\n", x, y);
-        return;
-    }
-
-    if ((x != rfb->width || y != rfb->height) && x > 160 && y > 0) {
-        vnc_log("VNC: updating resolution: %dx%d\n", x, y);
-
-        allowedX = (rfb->width < x) ? rfb->width : x;
-        allowedY = (rfb->width < y) ? rfb->width : y;
-
-        rfb->width  = x;
-        rfb->height = y;
-
-        iterator = rfbGetClientIterator(rfb);
-        while ((cl = rfbClientIteratorNext(iterator)) != NULL) {
-            LOCK(cl->updateMutex);
-            cl->newFBSizePending = 1;
-            UNLOCK(cl->updateMutex);
-        }
-    }
+    /* Dynamic resize is suppressed. Sending ExtDesktopSize concurrently with
+       pending FramebufferUpdates causes "rect too big" errors in VNC clients
+       due to an inherent race in libvncserver's update path — there is no way
+       to atomically discard already-queued rects and notify the new size.
+       The declared framebuffer size stays fixed at init dimensions; blits are
+       clamped in vnc_blit to whatever fits. */
+    (void) x;
+    (void) y;
 }
 
 /* Tell them to pause if we have no clients. */

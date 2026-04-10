@@ -153,6 +153,7 @@ extern int force_debug; /* (O) force debug output */
 #ifdef USE_WX
 extern int video_fps; /* (O) render speed in fps */
 #endif
+extern int headless;          /* (O) headless mode - no display window */
 extern int settings_only;     /* (O) show only the settings dialog */
 extern int confirm_exit_cmdl; /* (O) do not ask for confirmation on quit if set to 0 */
 #ifdef _WIN32

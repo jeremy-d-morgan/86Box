@@ -67,3 +67,7 @@ CMakeLists.txt.user
 
 # Jetbrains CLion
 .idea
+
+# jeremy-dev
+/jeremy-dev/headless_test/node_modules
+/jeremy-dev/headless_test/novnc

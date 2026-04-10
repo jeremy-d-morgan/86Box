@@ -466,7 +466,8 @@ MainWindow::MainWindow(QWidget *parent)
     ui->actionEnable_Discord_integration->setEnabled(discord_loaded);
 #endif
 
-    if ((QApplication::platformName().contains("eglfs") || QApplication::platformName() == "haiku")) {
+    if ((QApplication::platformName().contains("eglfs") || QApplication::platformName() == "haiku"
+         || QApplication::platformName() == "vnc" || QApplication::platformName() == "offscreen")) {
         if ((vid_api == RENDERER_OPENGL3) || (vid_api == RENDERER_VULKAN))
             fprintf(stderr, "OpenGL renderers are unsupported on %s.\n", QApplication::platformName().toUtf8().data());
         vid_api = RENDERER_SOFTWARE;

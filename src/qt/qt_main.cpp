@@ -55,6 +55,9 @@ extern "C" {
 #include <86box/gdbstub.h>
 #include <86box/version.h>
 #include <86box/renderdefs.h>
+#ifdef USE_VNC
+#    include <86box/vnc.h>
+#endif
 #ifdef Q_OS_LINUX
 #    define GAMEMODE_AUTO
 #    include "../unix/gamemode/gamemode_client.h"
@@ -524,6 +527,20 @@ WindowsDarkModeFilter *vmm_dark_mode_filter = nullptr;
 int
 main(int argc, char *argv[])
 {
+    /* Pre-scan argv for --headless before QApplication construction.
+       On Wayland/X11, a windowless QApplication cannot reliably dispatch
+       timers, so we need a headless-capable QPA platform.
+       - Default: "offscreen" (no display at all)
+       - If QT_QPA_PLATFORM is already set (e.g. "vnc"), respect it so
+         the user can get VNC output while still running headless. */
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--headless")) {
+            if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
+                qputenv("QT_QPA_PLATFORM", "offscreen");
+            break;
+        }
+    }
+
 #ifdef Q_OS_WINDOWS
     bool wasDarkTheme = false;
     /* Check if Windows supports UTF-8 */
@@ -636,11 +653,15 @@ main(int argc, char *argv[])
 #endif
 
     if (!pc_init_roms()) {
-        QMessageBox fatalbox(QMessageBox::Icon::Critical, QObject::tr("No ROMs found"),
-                             QObject::tr("86Box could not find any usable ROM images.\n\nPlease <a href=\"https://github.com/86Box/roms/releases/latest\">download</a> a ROM set and extract it into the \"roms\" directory."),
-                             QMessageBox::Ok);
-        fatalbox.setTextFormat(Qt::TextFormat::RichText);
-        fatalbox.exec();
+        if (!headless) {
+            QMessageBox fatalbox(QMessageBox::Icon::Critical, QObject::tr("No ROMs found"),
+                                 QObject::tr("86Box could not find any usable ROM images.\n\nPlease <a href=\"https://github.com/86Box/roms/releases/latest\">download</a> a ROM set and extract it into the \"roms\" directory."),
+                                 QMessageBox::Ok);
+            fatalbox.setTextFormat(Qt::TextFormat::RichText);
+            fatalbox.exec();
+        } else {
+            fprintf(stderr, "86Box: fatal: no ROM images found\n");
+        }
         return 6;
     }
 
@@ -676,20 +697,25 @@ main(int argc, char *argv[])
 
     // UUID / copy / move detection
     if (!util::compareUuid()) {
-        QMessageBox movewarnbox;
-        movewarnbox.setIcon(QMessageBox::Icon::Warning);
-        movewarnbox.setText(QObject::tr("This machine might have been moved or copied."));
-        movewarnbox.setInformativeText(QObject::tr("In order to ensure proper networking functionality, 86Box needs to know if this machine was moved or copied.\n\nSelect \"I Copied It\" if you are not sure."));
-        const QPushButton *movedButton  = movewarnbox.addButton(QObject::tr("I Moved It"), QMessageBox::AcceptRole);
-        const QPushButton *copiedButton = movewarnbox.addButton(QObject::tr("I Copied It"), QMessageBox::DestructiveRole);
-        QPushButton       *cancelButton = movewarnbox.addButton(QObject::tr("Cancel"), QMessageBox::RejectRole);
-        movewarnbox.setDefaultButton(cancelButton);
-        movewarnbox.exec();
-        if (movewarnbox.clickedButton() == copiedButton) {
+        if (headless) {
+            /* No user to ask in headless mode — assume moved, preserve MACs. */
             util::storeCurrentUuid();
-            util::generateNewMacAdresses();
-        } else if (movewarnbox.clickedButton() == movedButton) {
-            util::storeCurrentUuid();
+        } else {
+            QMessageBox movewarnbox;
+            movewarnbox.setIcon(QMessageBox::Icon::Warning);
+            movewarnbox.setText(QObject::tr("This machine might have been moved or copied."));
+            movewarnbox.setInformativeText(QObject::tr("In order to ensure proper networking functionality, 86Box needs to know if this machine was moved or copied.\n\nSelect \"I Copied It\" if you are not sure."));
+            const QPushButton *movedButton  = movewarnbox.addButton(QObject::tr("I Moved It"), QMessageBox::AcceptRole);
+            const QPushButton *copiedButton = movewarnbox.addButton(QObject::tr("I Copied It"), QMessageBox::DestructiveRole);
+            QPushButton       *cancelButton = movewarnbox.addButton(QObject::tr("Cancel"), QMessageBox::RejectRole);
+            movewarnbox.setDefaultButton(cancelButton);
+            movewarnbox.exec();
+            if (movewarnbox.clickedButton() == copiedButton) {
+                util::storeCurrentUuid();
+                util::generateNewMacAdresses();
+            } else if (movewarnbox.clickedButton() == movedButton) {
+                util::storeCurrentUuid();
+            }
         }
     }
 
@@ -730,7 +756,7 @@ main(int argc, char *argv[])
     }
 
     /* Warn the user about unsupported configs */
-    if (cpu_override) {
+    if (cpu_override && !headless) {
         QMessageBox warningbox(QMessageBox::Icon::Warning, QObject::tr("You are loading an unsupported configuration"),
                                QObject::tr("CPU type filtering based on selected machine is disabled for this emulated machine.\n\nThis makes it possible to choose a CPU that is otherwise incompatible with the selected machine. However, you may run into incompatibilities with the machine BIOS or other software.\n\nEnabling this setting is not officially supported and any bug reports filed may be closed as invalid."),
                                QMessageBox::NoButton);
@@ -753,28 +779,34 @@ main(int argc, char *argv[])
     atexit([]() -> void { timeEndPeriod(1); });
 #endif
 
-    main_window = new MainWindow();
-    if (startMaximized) {
-        main_window->showMaximized();
-    } else {
-        main_window->show();
-    }
+    /* In headless mode, skip the window unless we're on a virtual display
+       platform (like VNC) where the window IS the remote framebuffer. */
+    const bool headless_display = headless && !QApplication::platformName().contains("vnc");
+
+    if (!headless_display) {
+        main_window = new MainWindow();
+        if (startMaximized) {
+            main_window->showMaximized();
+        } else {
+            main_window->show();
+        }
 #ifdef WAYLAND
-    if (QApplication::platformName().contains("wayland")) {
-        /* Force a sync. */
-        (void) main_window->winId();
-        QApplication::sync();
-        extern void wl_keyboard_grab(QWindow * window);
-        wl_keyboard_grab(main_window->windowHandle());
-    }
+        if (QApplication::platformName().contains("wayland")) {
+            /* Force a sync. */
+            (void) main_window->winId();
+            QApplication::sync();
+            extern void wl_keyboard_grab(QWindow * window);
+            wl_keyboard_grab(main_window->windowHandle());
+        }
 #endif
 
-    app.installEventFilter(main_window);
+        app.installEventFilter(main_window);
+    }
 
 #ifdef Q_OS_WINDOWS
     /* Setup VM-manager messages */
     std::unique_ptr<WindowsManagerFilter> wmfilter;
-    if (source_hwnd) {
+    if (!headless_display && source_hwnd) {
         HWND main_hwnd = (HWND) main_window->winId();
 
         wmfilter.reset(new WindowsManagerFilter());
@@ -806,31 +838,33 @@ main(int argc, char *argv[])
         });
     }
 
-    /* Force raw input if a debugger is present. */
-    if (IsDebuggerPresent()) {
-        pclog("WARNING: Debugger detected, forcing raw input\n");
-        hook_enabled = 0;
-    }
+    if (!headless_display) {
+        /* Force raw input if a debugger is present. */
+        if (IsDebuggerPresent()) {
+            pclog("WARNING: Debugger detected, forcing raw input\n");
+            hook_enabled = 0;
+        }
 
-    if (hook_enabled) {
-        /* Yes, low-level hooks *DO* work with raw input, at least global ones. */
-        llhook = SetWindowsHookEx(WH_KEYBOARD_LL, emu_LowLevelKeyboardProc, NULL, 0);
-        atexit([]() -> void {
-            if (llhook)
-                UnhookWindowsHookEx(llhook);
-        });
-    }
+        if (hook_enabled) {
+            /* Yes, low-level hooks *DO* work with raw input, at least global ones. */
+            llhook = SetWindowsHookEx(WH_KEYBOARD_LL, emu_LowLevelKeyboardProc, NULL, 0);
+            atexit([]() -> void {
+                if (llhook)
+                    UnhookWindowsHookEx(llhook);
+            });
+        }
 
-    /* Setup raw input */
-    auto rawInputFilter = WindowsRawInputFilter::Register(main_window);
-    if (rawInputFilter) {
-        app.installNativeEventFilter(rawInputFilter.get());
-        main_window->setSendKeyboardInput(false);
+        /* Setup raw input */
+        auto rawInputFilter = WindowsRawInputFilter::Register(main_window);
+        if (rawInputFilter) {
+            app.installNativeEventFilter(rawInputFilter.get());
+            main_window->setSendKeyboardInput(false);
+        }
     }
 #endif
 
     UnixManagerSocket socket;
-    if (qgetenv("86BOX_MANAGER_SOCKET").size()) {
+    if (!headless_display && qgetenv("86BOX_MANAGER_SOCKET").size()) {
         QObject::connect(&socket, &UnixManagerSocket::showsettings, main_window, &MainWindow::showSettings);
         QObject::connect(&socket, &UnixManagerSocket::pause, main_window, &MainWindow::togglePause);
         QObject::connect(&socket, &UnixManagerSocket::resetVM, main_window, &MainWindow::hardReset);
@@ -847,24 +881,36 @@ main(int argc, char *argv[])
     VMManagerClientSocket manager_socket;
     if (qgetenv("VMM_86BOX_SOCKET").size()) {
         manager_socket.IPCConnect(qgetenv("VMM_86BOX_SOCKET"));
-        QObject::connect(&manager_socket, &VMManagerClientSocket::pause, main_window, &MainWindow::togglePause);
-        QObject::connect(&manager_socket, &VMManagerClientSocket::resetVM, main_window, &MainWindow::hardReset);
-        QObject::connect(&manager_socket, &VMManagerClientSocket::showsettings, main_window, &MainWindow::showSettings);
         QObject::connect(&manager_socket, &VMManagerClientSocket::ctrlaltdel, []() { pc_send_cad(); });
-        QObject::connect(&manager_socket, &VMManagerClientSocket::request_shutdown, main_window, &MainWindow::close);
         QObject::connect(&manager_socket, &VMManagerClientSocket::force_shutdown, []() {
+            is_quit = 1;
             do_stop();
-            emit main_window->close();
+            if (main_window != nullptr)
+                emit main_window->close();
+            else
+                QApplication::quit();
         });
-        QObject::connect(&manager_socket, &VMManagerClientSocket::floppyInsert, main_window, &MainWindow::floppyInsert);
-        QObject::connect(&manager_socket, &VMManagerClientSocket::floppyEject, main_window, &MainWindow::floppyEject);
-        QObject::connect(&manager_socket, &VMManagerClientSocket::floppyRefresh, main_window, &MainWindow::floppyRefresh);
-        QObject::connect(main_window, &MainWindow::vmmRunningStateChanged, &manager_socket, &VMManagerClientSocket::clientRunningStateChanged);
-        QObject::connect(main_window, &MainWindow::vmmConfigurationChanged, &manager_socket, &VMManagerClientSocket::configurationChanged);
-        QObject::connect(main_window, &MainWindow::vmmGlobalConfigurationChanged, &manager_socket, &VMManagerClientSocket::globalConfigurationChanged);
-        main_window->installEventFilter(&manager_socket);
-
-        manager_socket.sendWinIdMessage(main_window->winId());
+        QObject::connect(&manager_socket, &VMManagerClientSocket::request_shutdown, []() {
+            is_quit = 1;
+            do_stop();
+            if (main_window != nullptr)
+                emit main_window->close();
+            else
+                QApplication::quit();
+        });
+        if (main_window != nullptr) {
+            QObject::connect(&manager_socket, &VMManagerClientSocket::pause, main_window, &MainWindow::togglePause);
+            QObject::connect(&manager_socket, &VMManagerClientSocket::resetVM, main_window, &MainWindow::hardReset);
+            QObject::connect(&manager_socket, &VMManagerClientSocket::showsettings, main_window, &MainWindow::showSettings);
+            QObject::connect(&manager_socket, &VMManagerClientSocket::floppyInsert, main_window, &MainWindow::floppyInsert);
+            QObject::connect(&manager_socket, &VMManagerClientSocket::floppyEject, main_window, &MainWindow::floppyEject);
+            QObject::connect(&manager_socket, &VMManagerClientSocket::floppyRefresh, main_window, &MainWindow::floppyRefresh);
+            QObject::connect(main_window, &MainWindow::vmmRunningStateChanged, &manager_socket, &VMManagerClientSocket::clientRunningStateChanged);
+            QObject::connect(main_window, &MainWindow::vmmConfigurationChanged, &manager_socket, &VMManagerClientSocket::configurationChanged);
+            QObject::connect(main_window, &MainWindow::vmmGlobalConfigurationChanged, &manager_socket, &VMManagerClientSocket::globalConfigurationChanged);
+            main_window->installEventFilter(&manager_socket);
+            manager_socket.sendWinIdMessage(main_window->winId());
+        }
     }
 
     // pc_reset_hard_init();
@@ -894,8 +940,17 @@ main(int argc, char *argv[])
     }
 #endif
 
+    /* In headless mode with the offscreen platform, force the VNC renderer
+       so there is actually something to connect to. This overrides whatever
+       the config file says — a headless offscreen instance with no renderer
+       is not useful for display purposes. */
+#ifdef USE_VNC
+    if (headless_display)
+        vid_api = RENDERER_VNC;
+#endif
+
     /* Initialize the rendering window, or fullscreen. */
-    QTimer::singleShot(0, &app, [] {
+    QTimer::singleShot(0, &app, [headless_display] {
         plat_set_thread_name(nullptr, "qt_thread");
 
 #ifdef Q_OS_WINDOWS
@@ -903,6 +958,13 @@ main(int argc, char *argv[])
         NewDarkMode = util::isWindowsLightTheme();
 #endif
         pc_reset_hard_init();
+
+#ifdef USE_VNC
+        /* In headless mode the MainWindow is not created, so vnc_init() is
+           never triggered via the renderer action group. Call it directly. */
+        if (headless_display && vid_api == RENDERER_VNC)
+            vnc_init(nullptr);
+#endif
 
         /* Set the PAUSE mode depending on the renderer. */
 #ifdef USE_VNC
@@ -918,7 +980,10 @@ main(int argc, char *argv[])
 
     const auto ret = app.exec();
     cpu_thread_run = 0;
-    main_thread->join();
+    is_quit        = 1;
+    if (main_thread != nullptr) {
+        main_thread->join();
+    }
     pc_close(nullptr);
     endblit();
 

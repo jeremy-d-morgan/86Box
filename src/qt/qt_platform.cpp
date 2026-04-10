@@ -648,10 +648,11 @@ plat_pause(int p)
     }
 
     if ((!!p) == dopause) {
-        QTimer::singleShot(0, main_window, &MainWindow::updateUiPauseState);
+        if (main_window != nullptr)
+            QTimer::singleShot(0, main_window, &MainWindow::updateUiPauseState);
 
 #ifdef Q_OS_WINDOWS
-        if (source_hwnd)
+        if (main_window != nullptr && source_hwnd)
             PostMessage((HWND) (uintptr_t) source_hwnd, WM_SENDSTATUS, (WPARAM) !!p, (LPARAM) (HWND) main_window->winId());
 #endif
         return;
@@ -669,27 +670,30 @@ plat_pause(int p)
 #endif
 
     do_pause(p);
-    if (p) {
-        if (mouse_capture)
-            plat_mouse_capture(0);
+    if (main_window != nullptr) {
+        if (p) {
+            if (mouse_capture)
+                plat_mouse_capture(0);
 
-        wcsncpy(oldtitle, ui_window_title(NULL), sizeof_w(oldtitle) - 1);
-        wcscpy(title, oldtitle);
-        paused_msg[QObject::tr(" - PAUSED").toWCharArray(paused_msg)] = 0;
-        wcscat(title, paused_msg);
-        ui_window_title(title);
-    } else {
-        ui_window_title(oldtitle);
+            wcsncpy(oldtitle, ui_window_title(NULL), sizeof_w(oldtitle) - 1);
+            wcscpy(title, oldtitle);
+            paused_msg[QObject::tr(" - PAUSED").toWCharArray(paused_msg)] = 0;
+            wcscat(title, paused_msg);
+            ui_window_title(title);
+        } else {
+            ui_window_title(oldtitle);
+        }
     }
 
 #ifdef DISCORD
     discord_update_activity(dopause);
 #endif
 
-    QTimer::singleShot(0, main_window, &MainWindow::updateUiPauseState);
+    if (main_window != nullptr)
+        QTimer::singleShot(0, main_window, &MainWindow::updateUiPauseState);
 
 #ifdef Q_OS_WINDOWS
-    if (source_hwnd)
+    if (main_window != nullptr && source_hwnd)
         PostMessage((HWND) (uintptr_t) source_hwnd, WM_SENDSTATUS, (WPARAM) !!p, (LPARAM) (HWND) main_window->winId());
 #endif
 }
@@ -707,7 +711,10 @@ plat_power_off(void)
     cycles -= 99999999;
 
     cpu_thread_run = 0;
-    QTimer::singleShot(0, (const QWidget *) main_window, &QMainWindow::close);
+    if (main_window != nullptr)
+        QTimer::singleShot(0, (const QWidget *) main_window, &QMainWindow::close);
+    else
+        QApplication::quit();
 }
 
 /* Converts the language code string to a numeric language ID */
@@ -1141,6 +1148,10 @@ plat_send_to_clipboard(unsigned char *rgb, int width, int height)
     height_ = height;
     waiting = 1;
 
+    if (main_window == nullptr) {
+        waiting = 0;
+        return;
+    }
     QTimer::singleShot(0, main_window, &send_to_clipboard);
     while (waiting)
         ;

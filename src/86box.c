@@ -139,6 +139,7 @@ int force_debug = 0; /* (O) force debug output */
 #ifdef USE_WX
 int video_fps = RENDER_FPS; /* (O) render speed in fps */
 #endif
+int headless          = 0; /* (O) headless mode - no display window */
 int settings_only     = 0; /* (O) show only the settings dialog */
 int confirm_exit_cmdl = 1; /* (O) do not ask for confirmation on quit if set to 0 */
 #ifdef _WIN32
@@ -723,6 +724,7 @@ pc_show_usage(void)
             "\t\t\t\t   point on init/hard reset\n"
 #endif
             "-V or --vmname name\t\t- overrides the name of the running VM\n"
+            "   or --headless\t\t- run without display window\n"
 #ifdef _WIN32
             "-W or --nohook\t\t- disables keyboard hook\n"
 #else
@@ -933,6 +935,8 @@ usage:
             confirm_exit_cmdl = 0;
         } else if (!strcasecmp(argv[c], "--missing") || !strcasecmp(argv[c], "-M")) {
             dump_missing = 1;
+        } else if (!strcasecmp(argv[c], "--headless")) {
+            headless = 1;
         } else if (!strcasecmp(argv[c], "--donothing") || !strcasecmp(argv[c], "-Y")) {
             do_nothing = 1;
         } else if (!strcasecmp(argv[c], "--nohook") || !strcasecmp(argv[c], "-W")) {

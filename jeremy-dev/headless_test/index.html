@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>86Box Headless Viewer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a1a;
+            color: #ccc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        #toolbar {
+            background: #2a2a2a;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            border-bottom: 1px solid #444;
+            flex-shrink: 0;
+        }
+        #toolbar h1 { font-size: 14px; font-weight: 600; }
+        #status {
+            font-size: 12px;
+            padding: 3px 10px;
+            border-radius: 10px;
+            background: #c0392b;
+        }
+        #status.connected { background: #27ae60; }
+        #screen-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        }
+        #screen {
+            background: #000;
+        }
+    </style>
+</head>
+<body>
+    <div id="toolbar">
+        <h1>86Box Headless</h1>
+        <span id="status">Disconnected</span>
+    </div>
+    <div id="screen-container">
+        <div id="screen"></div>
+    </div>
+
+    <script type="module">
+        import RFB from "/novnc/core/rfb.js";
+
+        const status = document.getElementById("status");
+        const screenEl = document.getElementById("screen");
+
+        const wsUrl = `ws://${window.location.hostname}:${window.location.port}/websockify`;
+
+        function connect() {
+            status.textContent = "Connecting...";
+            status.className = "";
+
+            const rfb = new RFB(screenEl, wsUrl, {
+                wsProtocols: ["binary"],
+            });
+
+            rfb.scaleViewport = true;
+            rfb.resizeSession = false;
+
+            rfb.addEventListener("connect", () => {
+                status.textContent = "Connected";
+                status.className = "connected";
+            });
+
+            rfb.addEventListener("disconnect", (e) => {
+                status.textContent = "Disconnected";
+                status.className = "";
+                // Reconnect after a delay
+                setTimeout(connect, 2000);
+            });
+
+            rfb.addEventListener("desktopname", (e) => {
+                document.title = `86Box - ${e.detail.name}`;
+            });
+        }
+
+        connect();
+    </script>
+</body>
+</html>
