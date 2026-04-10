@@ -172,7 +172,7 @@ webview. This is the intended display path for the VSCode extension.
 | File | Purpose |
 |---|---|
 | `headless_test/server.js` | HTTP static file server + WebSocket-to-TCP proxy (`/websockify`) |
-| `headless_test/index.html` | noVNC viewer page with auto-reconnect |
+| `headless_test/index.html` | noVNC viewer page with zoom controls and auto-reconnect |
 | `headless_test/start.sh` | Launches 86Box headless + the Node.js server together |
 | `headless_test/novnc/` | Browser ESM noVNC source (fetched via `npx degit novnc/noVNC#v1.5.0`) |
 
@@ -180,6 +180,14 @@ The websockify proxy explicitly sends binary WebSocket frames
 (`ws.send(data, { binary: true })`) and retries TCP connections to port 5900
 for up to 10 seconds, so connecting before 86Box has fully started does not
 cause an immediate disconnect.
+
+**Viewer features (`index.html`):**
+- `−`/`+` buttons step through scale presets: 0.25×, 0.5×, 0.75×, 1×, 1.5×, 2×, 3×, 4×
+- **Fill** button expands to fit the viewport, letterboxed to preserve aspect ratio, centered
+- `image-rendering: pixelated` for crisp nearest-neighbor scaling
+- `MutationObserver` on the canvas `width`/`height` attributes — automatically reapplies the current scale whenever the VNC server changes resolution, so aspect ratio is always correct without a page refresh
+- `ResizeObserver` on the container — fill mode recalculates on window resize
+- Auto-reconnects after 2 seconds on disconnect
 
 **Setup:**
 ```bash

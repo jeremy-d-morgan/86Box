@@ -11,34 +11,68 @@
             display: flex;
             flex-direction: column;
             height: 100vh;
+            overflow: hidden;
         }
         #toolbar {
             background: #2a2a2a;
-            padding: 8px 16px;
+            padding: 6px 12px;
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 12px;
             border-bottom: 1px solid #444;
             flex-shrink: 0;
+            user-select: none;
         }
-        #toolbar h1 { font-size: 14px; font-weight: 600; }
+        #toolbar h1 { font-size: 13px; font-weight: 600; color: #eee; }
         #status {
-            font-size: 12px;
-            padding: 3px 10px;
-            border-radius: 10px;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 8px;
             background: #c0392b;
         }
         #status.connected { background: #27ae60; }
-        #screen-container {
-            flex: 1;
+        .zoom-controls {
             display: flex;
             align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            position: relative;
+            gap: 4px;
+            margin-left: auto;
         }
+        .zoom-controls button {
+            background: #3a3a3a;
+            border: 1px solid #555;
+            color: #ccc;
+            border-radius: 4px;
+            padding: 3px 8px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .zoom-controls button:hover { background: #4a4a4a; }
+        .zoom-controls button.active { background: #1a6b3a; border-color: #27ae60; color: #fff; }
+        #zoom-level { font-size: 12px; min-width: 42px; text-align: center; color: #aaa; }
+
+        #screen-container {
+            flex: 1;
+            overflow: auto;
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+            background: #111;
+        }
+        #screen-container.fill {
+            overflow: hidden;
+            align-items: center;
+            justify-content: center;
+        }
+
         #screen {
-            background: #000;
+            flex-shrink: 0;
+        }
+        #screen canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
         }
     </style>
 </head>
@@ -46,6 +80,12 @@
     <div id="toolbar">
         <h1>86Box Headless</h1>
         <span id="status">Disconnected</span>
+        <div class="zoom-controls">
+            <button id="btn-zoom-out">-</button>
+            <span id="zoom-level">1x</span>
+            <button id="btn-zoom-in">+</button>
+            <button id="btn-fill">Fill</button>
+        </div>
     </div>
     <div id="screen-container">
         <div id="screen"></div>
@@ -54,31 +94,100 @@
     <script type="module">
         import RFB from "/novnc/core/rfb.js";
 
-        const status = document.getElementById("status");
-        const screenEl = document.getElementById("screen");
+        const statusEl  = document.getElementById("status");
+        const screenEl  = document.getElementById("screen");
+        const zoomLabel = document.getElementById("zoom-level");
+        const btnFill   = document.getElementById("btn-fill");
+        const container = document.getElementById("screen-container");
 
         const wsUrl = `ws://${window.location.hostname}:${window.location.port}/websockify`;
 
+        const SCALES = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+        let scaleIdx = 3; // default 1x
+        let fill = false;
+
+        function applySize() {
+            const canvas = screenEl.querySelector("canvas");
+            const ratio  = canvas && canvas.width ? canvas.height / canvas.width : 3 / 4;
+
+            if (fill) {
+                const availW = container.clientWidth;
+                const availH = container.clientHeight;
+                const fitW   = availH / ratio;   // width if constrained by height
+                const fitH   = availW * ratio;   // height if constrained by width
+                let w, h;
+                if (fitH <= availH) {
+                    w = availW; h = Math.round(fitH);
+                } else {
+                    w = Math.round(fitW); h = availH;
+                }
+                screenEl.style.width  = w + "px";
+                screenEl.style.height = h + "px";
+                container.classList.add("fill");
+                zoomLabel.textContent = "Fill";
+                btnFill.classList.add("active");
+            } else {
+                container.classList.remove("fill");
+                const scale = SCALES[scaleIdx];
+                const nativeW = canvas ? canvas.width  : 640;
+                const nativeH = canvas ? canvas.height : 480;
+                screenEl.style.width  = Math.round(nativeW * scale) + "px";
+                screenEl.style.height = Math.round(nativeH * scale) + "px";
+                zoomLabel.textContent = scale + "x";
+                btnFill.classList.remove("active");
+            }
+        }
+
+        // Re-fit when the browser window resizes in fill mode
+        new ResizeObserver(() => { if (fill) applySize(); }).observe(container);
+
+        // Watch for noVNC adding the canvas, then watch its width/height
+        // attributes — these change whenever the VNC server changes resolution
+        const attrObserver = new MutationObserver(applySize);
+        new MutationObserver(() => {
+            const canvas = screenEl.querySelector("canvas");
+            if (canvas) {
+                attrObserver.disconnect();
+                attrObserver.observe(canvas, { attributes: true, attributeFilter: ["width", "height"] });
+            }
+        }).observe(screenEl, { childList: true, subtree: true });
+
+        document.getElementById("btn-zoom-in").addEventListener("click", () => {
+            fill = false;
+            scaleIdx = Math.min(SCALES.length - 1, scaleIdx + 1);
+            applySize();
+        });
+
+        document.getElementById("btn-zoom-out").addEventListener("click", () => {
+            fill = false;
+            scaleIdx = Math.max(0, scaleIdx - 1);
+            applySize();
+        });
+
+        btnFill.addEventListener("click", () => {
+            fill = !fill;
+            applySize();
+        });
+
         function connect() {
-            status.textContent = "Connecting...";
-            status.className = "";
+            statusEl.textContent = "Connecting...";
+            statusEl.className   = "";
 
-            const rfb = new RFB(screenEl, wsUrl, {
-                wsProtocols: ["binary"],
-            });
-
-            rfb.scaleViewport = true;
+            const rfb = new RFB(screenEl, wsUrl, { wsProtocols: ["binary"] });
+            rfb.scaleViewport = false;
             rfb.resizeSession = false;
 
             rfb.addEventListener("connect", () => {
-                status.textContent = "Connected";
-                status.className = "connected";
+                statusEl.textContent = "Connected";
+                statusEl.className   = "connected";
+                applySize();
             });
 
-            rfb.addEventListener("disconnect", (e) => {
-                status.textContent = "Disconnected";
-                status.className = "";
-                // Reconnect after a delay
+            rfb.addEventListener("desktopsize", () => applySize());
+
+            rfb.addEventListener("disconnect", () => {
+                statusEl.textContent = "Disconnected";
+                statusEl.className   = "";
                 setTimeout(connect, 2000);
             });
 
@@ -87,6 +196,7 @@
             });
         }
 
+        applySize();
         connect();
     </script>
 </body>
